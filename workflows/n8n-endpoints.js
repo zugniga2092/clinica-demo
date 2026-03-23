@@ -3,8 +3,47 @@ const express = require('express');
 const memory = require('../memory');
 const config = require(`../clientes/${process.env.BUSINESS_ID}/config`);
 const instrucciones = require(`../clientes/${process.env.BUSINESS_ID}/instrucciones`);
+const sessionStore = require('../sessionStore');
 
 const router = express.Router();
+
+// ── POST /api/v1/broadcast — Envío proactivo de mensajes desde n8n ────────────
+// Headers: x-api-key (must match N8N_API_KEY env var if set)
+// Body: { chatId, message, businessId?, context?: { expectsReply?, label? } }
+
+router.post('/api/v1/broadcast', async (req, res) => {
+  // API key validation
+  const apiKey = req.headers['x-api-key'] || req.body.apiKey;
+  if (process.env.N8N_API_KEY && apiKey !== process.env.N8N_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized: invalid API key' });
+  }
+
+  const { chatId, message, businessId: reqBusinessId, context } = req.body;
+  const businessId = reqBusinessId || process.env.BUSINESS_ID;
+
+  if (!chatId || !message) {
+    return res.status(400).json({ error: 'chatId y message son obligatorios' });
+  }
+
+  try {
+    await req.bot.telegram.sendMessage(String(chatId), message, { parse_mode: 'Markdown' });
+    await memory.saveNotificacion(businessId, 'broadcast', message, String(chatId));
+
+    // Open a follow-up session if the message expects a reply (ends with ? or flag set)
+    const expectsReply = context?.expectsReply || message.trim().endsWith('?');
+    if (expectsReply) {
+      sessionStore.setOutboundContext(chatId, {
+        originalMessage: message,
+        label: context?.label || 'broadcast',
+      });
+    }
+
+    res.json({ ok: true, sent: true, chatId, followupSessionOpen: expectsReply });
+  } catch (err) {
+    console.error('[broadcast] Error:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
 // ── POST /agent — Endpoint principal para n8n ─────────────────────────────────
 // Body: { businessId, action, data }

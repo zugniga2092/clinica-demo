@@ -4,6 +4,7 @@ const { Telegraf } = require('telegraf');
 const cliente = require('./commands/cliente');
 const admin = require('./commands/admin');
 const memory = require('./memory');
+const sessionStore = require('./sessionStore');
 
 const BUSINESS_ID = process.env.BUSINESS_ID;
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
@@ -121,7 +122,18 @@ function createBot() {
 async function handlePatient(ctx, bot, chatId, texto) {
   let respuesta;
   try {
-    respuesta = await cliente.handleMessage(BUSINESS_ID, chatId, texto, bot);
+    let mensajeFinal = texto;
+
+    // If this patient was sent an outbound message expecting a reply, inject context
+    const outboundCtx = sessionStore.getOutboundContext(chatId);
+    if (outboundCtx) {
+      sessionStore.clearOutboundContext(chatId);
+      mensajeFinal =
+        `[CONTEXTO: El paciente responde a este mensaje previo del sistema: "${outboundCtx.originalMessage}"]` +
+        `\n\n${texto}`;
+    }
+
+    respuesta = await cliente.handleMessage(BUSINESS_ID, chatId, mensajeFinal, bot);
   } catch (err) {
     console.error('[messenger] Error en cliente:', err);
     const idioma = await getPatientIdioma(chatId);

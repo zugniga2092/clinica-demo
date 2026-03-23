@@ -393,6 +393,21 @@ async function saveNotificacion(businessId, tipo, contenido, destinatario) {
   if (error) console.error('[memory] saveNotificacion:', error.message);
 }
 
+async function saveKnowledgeDirect(businessId, pregunta, respuesta) {
+  const { error } = await supabase
+    .from('preguntas_desconocidas')
+    .insert({
+      business_id: businessId,
+      chat_id: null,
+      pregunta,
+      respuesta,
+      estado: 'respondida',
+    });
+
+  if (error) { console.error('[memory] saveKnowledgeDirect:', error.message); return false; }
+  return true;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function parseFecha(fechaStr) {
@@ -430,6 +445,7 @@ module.exports = {
   getPreguntasPendientes,
   responderPregunta,
   getKnowledgeBase,
+  saveKnowledgeDirect,
   upsertAgendaDia,
   getDayContext,
   saveRecordatorioTratamiento,

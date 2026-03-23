@@ -53,6 +53,9 @@ async function handleMessage(businessId, chatId, texto, bot) {
   if (cmd.startsWith('cerrar ')) {
     return await cmdCerrarDia(businessId, cmd.replace('cerrar ', '').trim());
   }
+  if (cmd.startsWith('aprender ')) {
+    return await cmdAprender(businessId, cmd.replace('aprender ', '').trim());
+  }
   if (cmd === 'ayuda' || cmd === 'help') {
     return cmdAyuda();
   }
@@ -296,6 +299,25 @@ async function cmdReporteSemanal(businessId) {
   );
 }
 
+async function cmdAprender(businessId, texto) {
+  const separatorIdx = texto.indexOf('|');
+  if (separatorIdx === -1) {
+    return (
+      '❌ Formato: `#admin aprender <pregunta> | <respuesta>`\n' +
+      'Ejemplo: `#admin aprender ¿Aceptáis Bizum? | Sí, aceptamos Bizum, tarjeta y efectivo.`'
+    );
+  }
+
+  const pregunta = texto.substring(0, separatorIdx).trim();
+  const respuesta = texto.substring(separatorIdx + 1).trim();
+
+  if (!pregunta || !respuesta) return '❌ La pregunta y la respuesta no pueden estar vacías.';
+
+  const ok = await memory.saveKnowledgeDirect(businessId, pregunta, respuesta);
+  if (!ok) return '⚠️ No se pudo guardar. Inténtalo de nuevo.';
+  return `✅ Conocimiento guardado. El agente usará esta respuesta desde ahora:\nP: "${pregunta}"\nR: "${respuesta}"`;
+}
+
 function cmdAyuda() {
   return (
     `🤖 *Comandos disponibles:*\n\n` +
@@ -309,6 +331,7 @@ function cmdAyuda() {
     `\`#admin lista espera\` — Lista de espera\n` +
     `\`#admin preguntas\` — Preguntas pendientes\n` +
     `\`#admin respuesta [id] [texto]\` — Responde pregunta\n` +
+    `\`#admin aprender <pregunta> | <respuesta>\` — Añade conocimiento directo\n` +
     `\`#admin resumen\` — Resumen del día\n` +
     `\`#admin reporte semanal\` — Métricas de la semana\n\n` +
     `*Agenda:*\n` +

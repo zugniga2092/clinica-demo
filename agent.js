@@ -2,6 +2,7 @@
 require('dotenv').config();
 const Anthropic = require('@anthropic-ai/sdk');
 const memory = require('./memory');
+const { getRelevantKB } = require('./contextManager');
 
 const BUSINESS_ID = process.env.BUSINESS_ID;
 const config = require(`./clientes/${BUSINESS_ID}/config`);
@@ -11,7 +12,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── System prompt dinámico ────────────────────────────────────────────────────
 
-async function buildSystemPrompt(businessId, chatId) {
+async function buildSystemPrompt(businessId, chatId, userQuery = null) {
   const ahora = new Date();
   const fechaHoy = ahora.toISOString().split('T')[0];
   const horaActual = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
@@ -74,10 +75,11 @@ async function buildSystemPrompt(businessId, chatId) {
     ).join('\n');
   }
 
-  // Base de conocimiento aprendida
+  // Base de conocimiento aprendida (filtrada por relevancia)
+  const kbFiltered = getRelevantKB(kb, userQuery);
   let kbStr = 'Sin preguntas respondidas todavía.';
-  if (kb.length > 0) {
-    kbStr = kb.map(q => `P: ${q.pregunta}\nR: ${q.respuesta}`).join('\n\n');
+  if (kbFiltered.length > 0) {
+    kbStr = kbFiltered.map(q => `P: ${q.pregunta}\nR: ${q.respuesta}`).join('\n\n');
   }
 
   return `
@@ -131,7 +133,7 @@ ${perfilPaciente}
 14. CITAS ACTIVAS DEL PACIENTE
 ${citasStr}
 
-15. BASE DE CONOCIMIENTO APRENDIDA
+15. CONTEXTO DE SOPORTE (preguntas similares resueltas)
 ${kbStr}
 
 16. VALIDACIÓN DE AGENDA
@@ -183,7 +185,7 @@ Si el paciente describe una reacción adversa grave, una urgencia médica, o nec
 
 async function getResponse(businessId, chatId, userMessage) {
   const [systemPrompt, history] = await Promise.all([
-    buildSystemPrompt(businessId, chatId),
+    buildSystemPrompt(businessId, chatId, userMessage),
     memory.getHistory(businessId, chatId, 10),
   ]);
 

@@ -34,7 +34,11 @@ agent.js → memory.js + config.js
 workflows/n8n-endpoints.js → memory.js + config.js + commands/admin.js
 ```
 
-**`config.js` is the only file that changes per client.** It contains clinic identity, treatment catalog (with `frecuencia_dias` per treatment), and cancellation policy.
+**All per-client files live in `clientes/<BUSINESS_ID>/`** — loaded dynamically by `agent.js` and `n8n-endpoints.js` via `require(\`./clientes/${BUSINESS_ID}/...\`)`:
+- `config.js` — clinic identity, contact info, hours, treatment catalog (with `frecuencia_dias`), cancellation policy
+- `instrucciones.js` — pre/post treatment instructions (plain text for system prompt + bilingual ES/EN objects for notifications)
+
+Root `config.js` is a template/readme only — it is not used at runtime.
 
 **System prompt is built dynamically** — `agent.js:buildSystemPrompt()` assembles all context (date/time, config, day availability, patient profile, active appointments, learned KB) from Supabase on every call. There is no static system prompt.
 
@@ -91,11 +95,12 @@ Key tables: `conversaciones` (short-term memory, last 10 messages), `pacientes` 
 
 ---
 
-## What is hardcoded vs configurable
+## Adding a new client
 
-**In `config.js` (change per client):** clinic identity, contact info, hours, treatment catalog, cancellation policy.
-
-**Hardcoded in `agent.js`:** pre/post treatment instructions per treatment type, recurrence frequencies in natural language. These are embedded directly in the system prompt string, not driven by config.
+1. Create `clientes/<BUSINESS_ID>/config.js` (copy from `clientes/clinica-demo/config.js`)
+2. Create `clientes/<BUSINESS_ID>/instrucciones.js` (copy from `clientes/clinica-demo/instrucciones.js`)
+3. Create a Telegram bot, a Supabase project, and run `supabase/schema.sql`
+4. Set `.env` with `BUSINESS_ID=<tu-business-id>` and the corresponding tokens
 
 ---
 
@@ -116,7 +121,7 @@ Handled in `workflows/n8n-endpoints.js`. The bot instance is injected into Expre
 
 Supported actions: `recordatorio_48h`, `recordatorio_24h`, `recordatorio_2h`, `post_tratamiento`, `encuesta_satisfaccion`, `solicitar_resena`, `recordatorio_recurrencia`, `reactivar_pacientes`, `notificar_lista_espera`, `aviso_agenda`, `reporte_semanal`.
 
-**Important:** Pre/post treatment instructions exist in two places — as plain text in `agent.js:buildSystemPrompt()` (for the conversation system prompt) and as bilingual ES/EN objects in `workflows/n8n-endpoints.js:getPreInstrucciones()`/`getPostInstrucciones()` (for notification messages). Changes to instructions must be applied in both places.
+**Important:** Pre/post treatment instructions are defined in `clientes/<BUSINESS_ID>/instrucciones.js`, which exports both plain-text strings (consumed by `agent.js:buildSystemPrompt()` for the system prompt) and bilingual ES/EN functions `getPreInstrucciones()`/`getPostInstrucciones()` (consumed by `workflows/n8n-endpoints.js` for notification messages). Both uses come from the same file — edit there only.
 
 Health check: `GET /health`
 
