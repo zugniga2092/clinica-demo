@@ -333,6 +333,17 @@ async function getKnowledgeBase(businessId) {
 
 // ── Agenda del día ────────────────────────────────────────────────────────────
 
+async function upsertAgendaDia(businessId, fecha, fields) {
+  const { error } = await supabase
+    .from('agenda_dia')
+    .upsert(
+      { business_id: businessId, fecha, ...fields },
+      { onConflict: 'business_id,fecha' }
+    );
+  if (error) { console.error('[memory] upsertAgendaDia:', error.message); return false; }
+  return true;
+}
+
 async function getDayContext(businessId, fecha) {
   const { data, error } = await supabase
     .from('agenda_dia')
@@ -419,6 +430,7 @@ module.exports = {
   getPreguntasPendientes,
   responderPregunta,
   getKnowledgeBase,
+  upsertAgendaDia,
   getDayContext,
   saveRecordatorioTratamiento,
   saveNotificacion,

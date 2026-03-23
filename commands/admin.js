@@ -47,6 +47,12 @@ async function handleMessage(businessId, chatId, texto, bot) {
   if (cmd === 'reporte semanal' || cmd === 'reporte') {
     return await cmdReporteSemanal(businessId);
   }
+  if (cmd.startsWith('agenda ') || cmd === 'agenda') {
+    return await cmdAgenda(businessId, cmd.replace(/^agenda\s*/, '').trim());
+  }
+  if (cmd.startsWith('cerrar ')) {
+    return await cmdCerrarDia(businessId, cmd.replace('cerrar ', '').trim());
+  }
   if (cmd === 'ayuda' || cmd === 'help') {
     return cmdAyuda();
   }
@@ -305,8 +311,62 @@ function cmdAyuda() {
     `\`#admin respuesta [id] [texto]\` — Responde pregunta\n` +
     `\`#admin resumen\` — Resumen del día\n` +
     `\`#admin reporte semanal\` — Métricas de la semana\n\n` +
+    `*Agenda:*\n` +
+    `\`#admin agenda hoy\` — Ver agenda del día\n` +
+    `\`#admin agenda hoy plazas=5 profesional=Nombre\` — Configurar agenda\n` +
+    `\`#admin agenda DD/MM/YYYY plazas=3 promocion=Texto notas=Texto\` — Día específico\n` +
+    `\`#admin cerrar hoy\` — Marcar día como cerrado\n\n` +
     `También puedes escribir en lenguaje libre y te entiendo.`
   );
+}
+
+// ── Agenda del día ────────────────────────────────────────────────────────────
+
+async function cmdAgenda(businessId, texto) {
+  const palabras = texto.split(' ');
+  const fecha = resolverFecha(palabras[0]);
+
+  if (!fecha) return '❌ Fecha no reconocida. Usa: `hoy`, `mañana` o `DD/MM/YYYY`.\nEjemplo: `#admin agenda hoy plazas=5 profesional=Dra. López`';
+
+  const resto = palabras.slice(1).join(' ').trim();
+
+  // Sin campos extra → mostrar agenda actual
+  if (!resto) {
+    const ctx = await memory.getDayContext(businessId, fecha);
+    if (!ctx) return `📅 Sin agenda configurada para el ${formatFecha(fecha)}.`;
+    const lineas = [
+      ctx.profesional   ? `👨‍⚕️ Profesional: ${ctx.profesional}` : '',
+      ctx.plazas_libres != null ? `🪑 Plazas libres: ${ctx.plazas_libres}` : '',
+      ctx.promocion     ? `🎁 Promoción: ${ctx.promocion}` : '',
+      ctx.notas_dia     ? `📝 Notas: ${ctx.notas_dia}` : '',
+    ].filter(Boolean);
+    return `📅 *Agenda ${formatFecha(fecha)}*\n\n${lineas.join('\n')}`;
+  }
+
+  // Con campos → actualizar
+  const campos = parsearCamposAgenda(resto);
+  if (Object.keys(campos).length === 0) {
+    return '❌ No reconocí ningún campo. Usa: `plazas=N`, `profesional=Nombre`, `promocion=Texto`, `notas=Texto`';
+  }
+
+  await memory.upsertAgendaDia(businessId, fecha, { activo: true, ...campos });
+
+  const resumen = [
+    campos.plazas_libres != null ? `Plazas: ${campos.plazas_libres}` : '',
+    campos.profesional  ? `Profesional: ${campos.profesional}` : '',
+    campos.promocion    ? `Promoción: ${campos.promocion}` : '',
+    campos.notas_dia    ? `Notas: ${campos.notas_dia}` : '',
+  ].filter(Boolean).join('\n');
+
+  return `✅ Agenda del ${formatFecha(fecha)} actualizada.\n${resumen}`;
+}
+
+async function cmdCerrarDia(businessId, texto) {
+  const fecha = resolverFecha(texto.trim());
+  if (!fecha) return '❌ Fecha no reconocida. Usa: `hoy`, `mañana` o `DD/MM/YYYY`.';
+
+  await memory.upsertAgendaDia(businessId, fecha, { activo: false, plazas_libres: 0 });
+  return `🔒 Agenda del ${formatFecha(fecha)} cerrada. El agente informará a los pacientes de que no hay disponibilidad.`;
 }
 
 // ── Fallback con Claude Haiku ─────────────────────────────────────────────────
@@ -344,6 +404,35 @@ Responde de forma útil y directa. Si no puedes ayudar con lo pedido, dilo clara
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function resolverFecha(str) {
+  if (!str) return null;
+  if (str === 'hoy') return new Date().toISOString().split('T')[0];
+  if (str === 'mañana') {
+    const m = new Date();
+    m.setDate(m.getDate() + 1);
+    return m.toISOString().split('T')[0];
+  }
+  if (str.includes('/')) {
+    const [d, mo, y] = str.split('/');
+    if (d && mo && y) return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  return null;
+}
+
+function parsearCamposAgenda(str) {
+  const campos = {};
+  const plazas = str.match(/plazas=(\d+)/i);
+  if (plazas) campos.plazas_libres = parseInt(plazas[1]);
+  // Captura valor hasta la siguiente clave (word=) o fin de cadena
+  const prof  = str.match(/profesional=(.+?)(?=\s+\w+=|$)/i);
+  if (prof)  campos.profesional = prof[1].trim();
+  const promo = str.match(/promocion=(.+?)(?=\s+\w+=|$)/i);
+  if (promo) campos.promocion = promo[1].trim();
+  const notas = str.match(/notas=(.+?)(?=\s+\w+=|$)/i);
+  if (notas) campos.notas_dia = notas[1].trim();
+  return campos;
+}
 
 function formatFecha(isoDate) {
   if (!isoDate) return '-';

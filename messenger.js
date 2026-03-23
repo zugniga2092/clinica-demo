@@ -104,10 +104,14 @@ function createBot() {
   });
 
   // ── Errores globales ──────────────────────────────────────────────────────
-  bot.catch((err, ctx) => {
+  bot.catch(async (err, ctx) => {
     console.error('[messenger] Error no capturado:', err);
     try {
-      ctx.reply('Ha ocurrido un error inesperado. Nuestro equipo está siendo notificado. Por favor, inténtelo de nuevo.');
+      const idioma = await getPatientIdioma(String(ctx.chat?.id));
+      const msg = idioma === 'en'
+        ? 'An unexpected error has occurred. Our team has been notified. Please try again.'
+        : 'Ha ocurrido un error inesperado. Nuestro equipo está siendo notificado. Por favor, inténtelo de nuevo.';
+      await ctx.reply(msg);
     } catch (_) {}
   });
 
