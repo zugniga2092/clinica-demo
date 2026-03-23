@@ -1,7 +1,7 @@
 // commands/admin.js — Modo admin: copiloto del equipo de recepción
 require('dotenv').config();
 const memory = require('../memory');
-const config = require('../config');
+const config = require(`../clientes/${process.env.BUSINESS_ID}/config`);
 const { getAdminResponse } = require('../agent');
 
 // ── Handler principal ─────────────────────────────────────────────────────────

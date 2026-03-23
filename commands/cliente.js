@@ -1,7 +1,7 @@
 // commands/cliente.js — Modo paciente: llama al agente y procesa etiquetas
 const agent = require('../agent');
 const memory = require('../memory');
-const config = require('../config');
+const config = require(`../clientes/${process.env.BUSINESS_ID}/config`);
 
 // ── Handler principal ─────────────────────────────────────────────────────────
 

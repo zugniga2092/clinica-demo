@@ -1,7 +1,8 @@
 // workflows/n8n-endpoints.js — Endpoints REST para automatizaciones n8n
 const express = require('express');
 const memory = require('../memory');
-const config = require('../config');
+const config = require(`../clientes/${process.env.BUSINESS_ID}/config`);
+const instrucciones = require(`../clientes/${process.env.BUSINESS_ID}/instrucciones`);
 
 const router = express.Router();
 
@@ -32,10 +33,10 @@ async function processAction(action, businessId, data, bot) {
     // Recordatorio 48h antes de la cita
     case 'recordatorio_48h': {
       const { chatId, nombre, tratamiento, fecha, hora, idioma = 'es' } = data;
-      const instrucciones = getPreInstrucciones(tratamiento);
+      const preInstr = instrucciones.getPreInstrucciones(tratamiento);
       const msg = idioma === 'en'
-        ? `Dear ${nombre},\n\nThis is a reminder that your ${tratamiento} appointment is tomorrow, ${fecha} at ${hora}.\n\n${instrucciones?.en || ''}\n\nSee you soon!`
-        : `Estimado/a ${nombre},\n\nLe recordamos que tiene su cita de ${tratamiento} mañana, ${fecha} a las ${hora}.\n\n${instrucciones?.es || ''}\n\n¡Le esperamos!`;
+        ? `Dear ${nombre},\n\nThis is a reminder that your ${tratamiento} appointment is tomorrow, ${fecha} at ${hora}.\n\n${preInstr?.en || ''}\n\nSee you soon!`
+        : `Estimado/a ${nombre},\n\nLe recordamos que tiene su cita de ${tratamiento} mañana, ${fecha} a las ${hora}.\n\n${preInstr?.es || ''}\n\n¡Le esperamos!`;
 
       await sendToPatient(bot, chatId, msg);
       await memory.saveNotificacion(businessId, 'recordatorio_48h', msg, chatId);
@@ -69,10 +70,10 @@ async function processAction(action, businessId, data, bot) {
     // Post-tratamiento (2h después)
     case 'post_tratamiento': {
       const { chatId, nombre, tratamiento, idioma = 'es' } = data;
-      const instrucciones = getPostInstrucciones(tratamiento);
+      const postInstr = instrucciones.getPostInstrucciones(tratamiento);
       const msg = idioma === 'en'
-        ? `Dear ${nombre}, thank you for visiting us today!\n\nHere are your post-treatment instructions for ${tratamiento}:\n\n${instrucciones?.en || 'Follow your specialist\'s recommendations.'}\n\nIf you have any questions or concerns, don't hesitate to contact us.`
-        : `Estimado/a ${nombre}, ¡gracias por visitarnos hoy!\n\nAquí tiene sus instrucciones post-tratamiento de ${tratamiento}:\n\n${instrucciones?.es || 'Siga las recomendaciones de su especialista.'}\n\nSi tiene cualquier duda o molestia, no dude en contactarnos.`;
+        ? `Dear ${nombre}, thank you for visiting us today!\n\nHere are your post-treatment instructions for ${tratamiento}:\n\n${postInstr?.en || 'Follow your specialist\'s recommendations.'}\n\nIf you have any questions or concerns, don't hesitate to contact us.`
+        : `Estimado/a ${nombre}, ¡gracias por visitarnos hoy!\n\nAquí tiene sus instrucciones post-tratamiento de ${tratamiento}:\n\n${postInstr?.es || 'Siga las recomendaciones de su especialista.'}\n\nSi tiene cualquier duda o molestia, no dude en contactarnos.`;
 
       await sendToPatient(bot, chatId, msg);
       await memory.saveNotificacion(businessId, 'post_tratamiento', msg, chatId);
@@ -177,68 +178,6 @@ async function processAction(action, businessId, data, bot) {
     default:
       throw new Error(`Acción desconocida: ${action}`);
   }
-}
-
-// ── Helpers de instrucciones ──────────────────────────────────────────────────
-
-function getPreInstrucciones(tratamiento) {
-  const t = (tratamiento || '').toLowerCase();
-
-  if (t.includes('botox') || t.includes('bótox') || t.includes('relleno')) {
-    return {
-      es: '📋 *Instrucciones pre-tratamiento:*\n• No tome alcohol las 24h previas\n• No tome anticoagulantes (ibuprofeno, aspirina)\n• Llegar con la piel limpia, sin maquillaje',
-      en: '📋 *Pre-treatment instructions:*\n• No alcohol 24h before\n• Avoid blood thinners (ibuprofen, aspirin)\n• Arrive with clean skin, no makeup',
-    };
-  }
-  if (t.includes('laser') || t.includes('láser') || t.includes('ipl')) {
-    return {
-      es: '📋 *Instrucciones pre-tratamiento:*\n• Sin exposición solar las 2 semanas previas\n• Sin depilación con cera las 4 semanas previas\n• Sin autobronceador las 2 semanas previas',
-      en: '📋 *Pre-treatment instructions:*\n• No sun exposure 2 weeks before\n• No wax hair removal 4 weeks before\n• No self-tanner 2 weeks before',
-    };
-  }
-  if (t.includes('peeling')) {
-    return {
-      es: '📋 *Instrucciones pre-tratamiento:*\n• No use retinol ni ácidos los 5 días previos\n• Sin exposición solar intensa la semana previa',
-      en: '📋 *Pre-treatment instructions:*\n• Avoid retinol and acids 5 days before\n• No intense sun exposure the week before',
-    };
-  }
-  if (t.includes('mesoterapia') || t.includes('bioestimulación') || t.includes('bioestimulacion')) {
-    return {
-      es: '📋 *Instrucciones pre-tratamiento:*\n• No tome anticoagulantes salvo prescripción médica\n• Llegar bien hidratado/a',
-      en: '📋 *Pre-treatment instructions:*\n• Avoid blood thinners unless medically prescribed\n• Arrive well hydrated',
-    };
-  }
-  return null;
-}
-
-function getPostInstrucciones(tratamiento) {
-  const t = (tratamiento || '').toLowerCase();
-
-  if (t.includes('botox') || t.includes('bótox')) {
-    return {
-      es: '• No se tumbe las 4h siguientes al tratamiento\n• No masajee la zona tratada las 24h siguientes\n• Evite calor intenso (sauna, sol directo) las 48h siguientes\n• El efecto completo se aprecia entre los días 7 y 14',
-      en: '• Do not lie down for 4 hours after treatment\n• Do not massage the treated area for 24 hours\n• Avoid intense heat (sauna, direct sun) for 48 hours\n• Full results visible between days 7 and 14',
-    };
-  }
-  if (t.includes('laser') || t.includes('láser') || t.includes('ipl')) {
-    return {
-      es: '• Aplique fotoprotector SPF 50+ cada 2h si hay exposición solar\n• Puede aparecer enrojecimiento leve las primeras 24-48h, es normal\n• No rasque ni exfolie la zona durante 7 días\n• Evite calor (sauna, deporte intenso) 48h',
-      en: '• Apply SPF 50+ sunscreen every 2h if sun-exposed\n• Mild redness may appear in the first 24-48h, this is normal\n• Do not scratch or exfoliate the area for 7 days\n• Avoid heat (sauna, intense exercise) for 48h',
-    };
-  }
-  if (t.includes('peeling')) {
-    return {
-      es: '• No arranque la piel que se descama — déjela caer sola\n• Hidratación intensa durante los días siguientes\n• Fotoprotector obligatorio durante 30 días',
-      en: '• Do not peel off flaking skin — let it fall off naturally\n• Intense moisturization in the following days\n• Sunscreen mandatory for 30 days',
-    };
-  }
-  if (t.includes('relleno')) {
-    return {
-      es: '• Evite masajear la zona tratada las 24h siguientes\n• No realice ejercicio intenso las primeras 24h\n• Evite calor extremo las 48h siguientes',
-      en: '• Avoid massaging the treated area for 24 hours\n• No intense exercise for the first 24 hours\n• Avoid extreme heat for 48 hours',
-    };
-  }
-  return null;
 }
 
 // ── Helpers de envío ──────────────────────────────────────────────────────────

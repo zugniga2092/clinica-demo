@@ -1,8 +1,11 @@
 // agent.js — Núcleo IA: construye el system prompt y llama a Claude
 require('dotenv').config();
 const Anthropic = require('@anthropic-ai/sdk');
-const config = require('./config');
 const memory = require('./memory');
+
+const BUSINESS_ID = process.env.BUSINESS_ID;
+const config = require(`./clientes/${BUSINESS_ID}/config`);
+const instrucciones = require(`./clientes/${BUSINESS_ID}/instrucciones`);
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -32,56 +35,9 @@ async function buildSystemPrompt(businessId, chatId) {
   const contraindicacionesStr = config.CONTRAINDICACIONES_GENERALES
     .map(c => `• ${c}`).join('\n');
 
-  // Instrucciones pre-tratamiento
-  const preTratamientoStr = `
-Bótox / Rellenos:
-• No tomar alcohol las 24h previas
-• No tomar anticoagulantes (ibuprofeno, aspirina) salvo prescripción médica
-• Llegar con la piel limpia, sin maquillaje
-
-Láser / IPL:
-• No exposición solar las 2 semanas previas
-• No depilación con cera ni hilo las 4 semanas previas
-• No usar autobronceador las 2 semanas previas
-• Informar si toma medicación fotosensibilizante
-
-Peeling químico:
-• No usar retinol ni ácidos los 5 días previos
-• No exposición solar intensa la semana previa
-
-Mesoterapia / Bioestimulación:
-• No tomar anticoagulantes salvo prescripción médica
-• Llegar bien hidratado/a`.trim();
-
-  // Instrucciones post-tratamiento
-  const postTratamientoStr = `
-Bótox:
-• No tumbarse las 4h siguientes al tratamiento
-• No masajear la zona tratada las 24h siguientes
-• Evitar calor intenso (sauna, sol directo) las 48h siguientes
-• El efecto completo se aprecia entre los días 7 y 14
-
-Láser / IPL:
-• Aplicar fotoprotector SPF 50+ cada 2h si hay exposición solar
-• Puede aparecer enrojecimiento leve las primeras 24-48h, es completamente normal
-• No rascar ni exfoliar la zona durante 7 días
-• Evitar calor (sauna, deporte intenso) 48h
-
-Peeling:
-• No arrancar la piel que se descama — dejar que caiga sola
-• Hidratación intensa durante los días siguientes
-• Fotoprotector obligatorio durante 30 días`.trim();
-
-  // Frecuencias de recurrencia
-  const frecuenciasStr = `
-• Bótox: cada 4-6 meses
-• Rellenos de ácido hialurónico: cada 9-12 meses
-• Láser depilación: cada 4-6 semanas durante el ciclo (8-10 sesiones), luego revisión anual
-• IPL / Fotorejuvenecimiento: cada 3-4 semanas en ciclo, luego mantenimiento semestral
-• Peeling químico: cada 3-4 semanas en ciclo, cada 6 meses mantenimiento
-• Mesoterapia capilar: mensual durante 3-4 meses, luego trimestral
-• Bioestimulación: cada 4-6 semanas durante 3 sesiones, luego semestral
-• Revisión general: anual para todos los pacientes activos`.trim();
+  const preTratamientoStr = instrucciones.preTratamiento;
+  const postTratamientoStr = instrucciones.postTratamiento;
+  const frecuenciasStr = instrucciones.frecuencias;
 
   // Contexto del día (Supabase)
   let contextoDia = 'No hay información de agenda configurada para hoy.';
