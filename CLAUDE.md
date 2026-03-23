@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this system is
 
-A conversational AI agent for an aesthetic clinic. It attends patients 24/7 via Telegram, manages appointments, answers treatment questions, and acts as a copilot for the reception team in admin mode. Always addresses patients formally (usted), supports ES/EN.
+A **Hybrid Multichannel AI Agent** for aesthetic clinics. It attends patients 24/7 via **Telegram, WhatsApp, and Voice (Vapi)**, manages appointments, answers treatment questions, and acts as an intelligent copilot for the reception team. Always addresses patients formally (usted / formal you), supports ES/EN.
 
 ---
 
@@ -24,73 +24,213 @@ Copy `.env.example` to `.env` before starting. The app exits immediately if any 
 
 ## Architecture and dependency rules
 
-**Strict dependency order — never invert:**
+### Channel entry points
+
+Each channel has its own webhook/listener that normalises the incoming message into a standard internal format `{ businessId, chatId, message, channel, is_voice }` and routes it to the core agent:
+
 ```
-index.js → messenger.js + workflows/n8n-endpoints.js
-messenger.js → commands/cliente.js + commands/admin.js + memory.js
-commands/cliente.js → agent.js + memory.js + config.js
-commands/admin.js → memory.js + config.js + agent.js
-agent.js → memory.js + config.js
-workflows/n8n-endpoints.js → memory.js + config.js + commands/admin.js
+Telegram (polling)   →  messenger.js
+WhatsApp (webhook)   →  webhooks/whatsapp.js   (Evolution API)
+Voice (webhook)      →  webhooks/vapi.js        (Vapi.ai)
 ```
 
-**All per-client files live in `clientes/<BUSINESS_ID>/`** — loaded dynamically by `agent.js` and `n8n-endpoints.js` via `require(\`./clientes/${BUSINESS_ID}/...\`)`:
-- `config.js` — clinic identity, contact info, hours, treatment catalog (with `frecuencia_dias`), cancellation policy
-- `instrucciones.js` — pre/post treatment instructions (plain text for system prompt + bilingual ES/EN objects for notifications)
+All three converge on the same core pipeline:
+
+```
+webhooks/* + messenger.js
+  → commands/cliente.js      (patient flow)
+  → core/agent.js            (LLM call + system prompt)
+  → core/actionHandler.js    (tag execution + error recovery)
+  → memory.js                (Supabase persistence)
+```
+
+### Strict dependency order — never invert
+
+```
+index.js
+  → messenger.js
+  → webhooks/whatsapp.js
+  → webhooks/vapi.js
+  → workflows/n8n-endpoints.js
+
+messenger.js / webhooks/*
+  → commands/cliente.js
+  → commands/admin.js
+  → memory.js
+
+commands/cliente.js   → core/agent.js + core/actionHandler.js + memory.js
+commands/admin.js     → memory.js + core/agent.js
+core/agent.js         → memory.js + contextManager.js + clientes/<BUSINESS_ID>/config.js
+core/actionHandler.js → memory.js + clientes/<BUSINESS_ID>/config.js
+workflows/n8n-endpoints.js → memory.js + sessionStore.js + commands/admin.js
+```
+
+### Per-client files — `clientes/<BUSINESS_ID>/`
+
+Loaded dynamically at runtime via `` require(`./clientes/${BUSINESS_ID}/...`) ``:
+
+- `config.js` — clinic identity, contact info, hours, treatment catalog (each with `frecuencia_dias`), cancellation policy
+- `instrucciones.js` — pre/post treatment instructions: plain-text strings for the system prompt + bilingual ES/EN objects for notification messages
 
 Root `config.js` is a template/readme only — it is not used at runtime.
 
-**System prompt is built dynamically** — `agent.js:buildSystemPrompt()` assembles all context (date/time, config, day availability, patient profile, active appointments, learned KB) from Supabase on every call. There is no static system prompt.
+---
+
+## System prompt — dynamic assembly
+
+`core/agent.js:buildSystemPrompt(businessId, chatId, userQuery, is_voice)` assembles all context on every call from Supabase. There is no static system prompt.
+
+Sections injected at build time:
+1. Date/time and locale
+2. Language detection + formal register rule
+3. Clinic identity (from `config.js`)
+4. Tone and communication rules — **when `is_voice=true`, add a constraint: responses must be ≤2 sentences, spoken-word safe (no markdown, no bullet points, no emojis)**
+5. Clinic info (address, phone, hours)
+6. Treatment catalogue
+7. General contraindications
+8. Pre/post treatment instructions (from `instrucciones.js`)
+9. Recurrence frequencies
+10. Day context (from `agenda_dia`)
+11. Patient profile (from `pacientes`)
+12. Active appointments (from `citas`)
+13. **Support context** — top-3 KB entries most relevant to `userQuery`, selected by `contextManager.js` via keyword-overlap scoring (not the full 30-entry dump)
+14. Booking policy and availability rules
+15. Appointment flow and data collection rules
+16. Tag system documentation (all supported tags)
+17. Urgency and referral protocol
 
 ---
 
 ## Tag pattern — key architectural decision
 
-The agent does **not** use function calling. Instead, Claude embeds special tags in its response that `cliente.js:procesarEtiquetas()` intercepts and processes **before** sending the text to the patient. The patient never sees the tags.
+The agent does **not** use function calling. Claude embeds special tags in its response that `core/actionHandler.js` intercepts and executes **before** the text is sent to the patient. The patient never sees the tags.
 
-Tags use this format: `[TAG_NAME: key=value, key=value]`
+**Format:** `[TAG_NAME: key=value, key=value]`
 
-The `parsearCampos()` regex handles values that contain commas (e.g., notes).
+`parsearCampos()` uses a regex that correctly handles values containing commas (e.g., `notas=Me interesa el bótox, también las ojeras`).
 
-All supported tags and their effects are documented in `agent.js` (section 18 of the system prompt).
+### Supported tags
+
+| Tag | Effect |
+|-----|--------|
+| `[CITA: nombre=X, fecha=DD/MM/YYYY, hora=HH:MM, tratamiento=X, telefono=X, idioma=es\|en, notas=X]` | Creates appointment in Supabase, notifies admin, schedules recurrence reminder |
+| `[CANCELAR_CITA: id=XXXXXXXX]` | Sets estado='cancelada', notifies admin, triggers waitlist check |
+| `[MODIFICAR_CITA: id=XXXXXXXX, campo=X, valor=X]` | Updates a single field on an existing appointment |
+| `[LISTA_ESPERA: nombre=X, tratamiento=X, franja=mañana\|tarde\|indiferente]` | Adds patient to waitlist, notifies admin |
+| `[PREGUNTA_DESCONOCIDA: texto]` | Saves unknown question for admin review; admin answers with `#admin respuesta [id] [text]` |
+| `[PACIENTE_NOTA: texto]` | Appends a note to the patient profile |
+| `[DETECTAR_IDIOMA: es\|en]` | Persists the patient's preferred language (use on first message only) |
+| `[ALERTA_CONTRAINDICACION: texto]` | Appends contraindication to patient profile, sends urgent alert to admin |
+
+### Error recovery — critical behaviour
+
+`processActions(rawText, businessId, chatId, bot, retryFn)` processes all tags in one global-regex pass. **If a tag's DB action fails** (e.g., `saveCita` returns null), the error is not silently swallowed:
+
+1. `actionHandler` calls `retryFn(errorMessage)` — a callback provided by `commands/cliente.js`
+2. `retryFn` injects the error as a system context message and re-calls the LLM
+3. Claude apologises naturally and offers a concrete alternative in the same turn
+4. The retry response is processed recursively with `retryFn=null` to prevent infinite loops
+
+`cleanTags(text)` is always applied as a final safety net — any `[TAG: ...]` that survived processing is stripped before the message reaches the patient.
 
 ---
 
 ## Models
 
-- **claude-sonnet-4-6** — patient conversations (`agent.js:getResponse`)
-- **claude-haiku-4-5-20251001** — admin fallback / fast tasks (`agent.js:getAdminResponse`)
+- **claude-sonnet-4-6** — patient conversations, full reasoning (`core/agent.js:getResponse`)
+- **claude-haiku-4-5-20251001** — admin free-text fallback, fast tasks, voice transcription summaries (`core/agent.js:getAdminResponse`)
 
 ---
 
-## Admin mode
+## Admin mode (Telegram only)
 
-Activated by prefixing a message with `#admin`. Only `TELEGRAM_ADMIN_CHAT_ID` can use admin mode (if the env var is set; if unset, any chat can). Session persists 30 minutes without activity, tracked in an in-memory `Map` in `messenger.js`.
+Activated by prefixing any message with `#admin`. Only `TELEGRAM_ADMIN_CHAT_ID` can use it (if unset, any chat can). Session persists **30 minutes from last activity**, tracked in an in-memory `Map` in `messenger.js`. During an active session, plain text is automatically routed through admin mode without needing the prefix.
 
-During an active admin session, any plain text (without `#admin` prefix) is automatically routed through admin mode and forwarded to Claude Haiku with real-time clinic context.
+### Structured commands (handled directly, no LLM)
 
-Structured commands (handled directly without Claude): `citas hoy`, `citas mañana`, `confirmar [nombre]`, `rechazar [nombre] [motivo]`, `cancelar [nombre]`, `completar [nombre]`, `no-show [nombre]`, `lista espera`, `preguntas`, `respuesta [id] [texto]`, `resumen`, `reporte semanal`, `ayuda`. Anything else falls back to Claude Haiku.
+`citas hoy` · `citas mañana` · `confirmar [nombre]` · `rechazar [nombre] [motivo]` · `cancelar [nombre]` · `completar [nombre]` · `no-show [nombre]` · `lista espera` · `preguntas` · `respuesta [id] [texto]` · `resumen` · `reporte semanal` · `agenda [fecha] [campos]` · `cerrar [fecha]` · `aprender <pregunta> | <respuesta>` · `ayuda`
+
+Anything not matching the above falls back to Claude Haiku with real-time clinic context.
+
+### Cross-channel admin notifications
+
+The admin receives automatic Telegram notifications for critical events regardless of their origin channel:
+
+| Event | Trigger |
+|-------|---------|
+| New appointment request | Any channel — `[CITA]` tag processed |
+| Unknown question | Any channel — `[PREGUNTA_DESCONOCIDA]` tag processed |
+| Contraindication alert | Any channel — `[ALERTA_CONTRAINDICACION]` tag processed |
+| Cancellation + waitlist match | Any channel — `[CANCELAR_CITA]` tag + waitlist hit |
+| Voice call summary | After Vapi webhook completes a session |
+
+Notifications are sent via `bot.telegram.sendMessage(TELEGRAM_ADMIN_CHAT_ID, ...)` regardless of which channel triggered the event.
+
+---
+
+## n8n integration
+
+### Reactive endpoint (existing)
+
+```
+POST /agent
+Body: { businessId, action, data }
+```
+
+Handled in `workflows/n8n-endpoints.js`. The bot instance is injected into Express requests via middleware in `index.js`.
+
+Supported actions: `recordatorio_48h` · `recordatorio_24h` · `recordatorio_2h` · `post_tratamiento` · `encuesta_satisfaccion` · `solicitar_resena` · `recordatorio_recurrencia` · `reactivar_pacientes` · `notificar_lista_espera` · `aviso_agenda` · `reporte_semanal`
+
+### Proactive broadcast endpoint
+
+```
+POST /api/v1/broadcast
+Headers: x-api-key: <N8N_API_KEY>
+Body: { chatId, message, businessId?, context?: { expectsReply?, label? } }
+```
+
+Sends an outbound message to a patient on any channel. Requires `N8N_API_KEY` header validation (bypassed if `N8N_API_KEY` env var is not set).
+
+**Session Locking — how follow-up context works:**
+
+When n8n sends a proactive message that expects a reply (message ends with `?` or `context.expectsReply=true`), `sessionStore.setOutboundContext(chatId, { originalMessage, label })` opens a follow-up session (TTL: 4 hours, in-memory via `sessionStore.js`).
+
+When the patient replies, `messenger.js:handlePatient()` detects the active session, clears it, and prepends a `[CONTEXTO: El paciente responde a: "..."]` system note to the message before passing it to the agent. This way Claude knows the reply is contextually tied to the reminder — not the start of a new conversation.
+
+**Pre/post treatment instructions** are defined once in `clientes/<BUSINESS_ID>/instrucciones.js` — consumed both by the system prompt (plain text) and by notification messages (bilingual objects). Edit there only.
+
+Health check: `GET /health`
 
 ---
 
 ## Database (Supabase)
 
-All tables include `business_id` for multi-tenant architecture. Run `supabase/schema.sql` in Supabase SQL Editor to create tables.
+All tables include `business_id` for multi-tenant isolation. Run `supabase/schema.sql` in Supabase SQL Editor to create tables.
 
-Key tables: `conversaciones` (short-term memory, last 10 messages), `pacientes` (long-term patient profile), `citas` (appointments with estados: pendiente → confirmada → completada / cancelada / rechazada / no_show), `lista_espera`, `preguntas_desconocidas` (also serves as knowledge base when estado='respondida'), `agenda_dia` (daily availability config), `recordatorios_tratamiento`, `notificaciones`.
+| Table | Purpose |
+|-------|---------|
+| `conversaciones` | Short-term memory — last 10 messages per `(business_id, chat_id)` |
+| `pacientes` | Long-term patient profile — language, skin type, allergies, visit history |
+| `citas` | Appointments — estados: `pendiente → confirmada → completada / cancelada / rechazada / no_show` |
+| `lista_espera` | Waitlist entries per treatment |
+| `preguntas_desconocidas` | Unknown questions (estado='pendiente') + answered KB (estado='respondida') |
+| `agenda_dia` | Daily availability config — professional on duty, open slots, promotions |
+| `recordatorios_tratamiento` | Scheduled recurrence reminders per patient/treatment |
+| `notificaciones` | Audit log of all outbound messages |
 
-**Note:** `memory.js:upsertPatient()` uses `onConflict: 'business_id,chat_id'`.
+**Critical DB rules:**
 
-**`getCitasByFecha` excludes `cancelada` and `rechazada` states.** Use `getCitasDelDiaCompleto` to get all states (used in `#admin resumen` to count cancellations).
-
-**`completarCita` does more than setting `estado='completada'`** — it also updates the patient profile: increments `visitas_total`, appends to `tratamientos_realizados`, and sets `ultima_visita`. Always use `completarCita` (not `updateCita`) when marking appointments done.
+- `memory.js:upsertPatient()` uses `onConflict: 'business_id,chat_id'`
+- `getCitasByFecha` **excludes** `cancelada` and `rechazada`. Use `getCitasDelDiaCompleto` when you need all states (e.g., `#admin resumen`)
+- **Always use `completarCita`** (not `updateCita`) when marking an appointment done — it also increments `visitas_total`, appends to `tratamientos_realizados`, and sets `ultima_visita` on the patient profile
+- `saveKnowledgeDirect(businessId, pregunta, respuesta)` inserts directly as `estado='respondida'`, bypassing the pending queue (used by `#admin aprender`)
 
 ---
 
 ## Date handling
 
-- Dates in the tag system use `DD/MM/YYYY` format
-- Supabase stores dates as `YYYY-MM-DD`
+- Tags use `DD/MM/YYYY`
+- Supabase stores `YYYY-MM-DD`
 - `memory.js:parseFecha()` converts between them
 
 ---
@@ -99,42 +239,34 @@ Key tables: `conversaciones` (short-term memory, last 10 messages), `pacientes` 
 
 1. Create `clientes/<BUSINESS_ID>/config.js` (copy from `clientes/clinica-demo/config.js`)
 2. Create `clientes/<BUSINESS_ID>/instrucciones.js` (copy from `clientes/clinica-demo/instrucciones.js`)
-3. Create a Telegram bot, a Supabase project, and run `supabase/schema.sql`
-4. Set `.env` with `BUSINESS_ID=<tu-business-id>` and the corresponding tokens
-
----
-
-## Telegram bot runtime
-
-The bot runs in **polling mode** (not webhooks). `bot.launch()` starts long-polling; `bot.stop()` is called on SIGINT/SIGTERM. There is no webhook setup. Voice messages and files are acknowledged but not processed.
-
----
-
-## n8n integration
-
-The REST endpoint exposed for n8n automations:
-```
-POST /agent
-Body: { businessId, action, data }
-```
-Handled in `workflows/n8n-endpoints.js`. The bot instance is injected into Express requests via middleware in `index.js` so endpoints can send Telegram messages.
-
-Supported actions: `recordatorio_48h`, `recordatorio_24h`, `recordatorio_2h`, `post_tratamiento`, `encuesta_satisfaccion`, `solicitar_resena`, `recordatorio_recurrencia`, `reactivar_pacientes`, `notificar_lista_espera`, `aviso_agenda`, `reporte_semanal`.
-
-**Important:** Pre/post treatment instructions are defined in `clientes/<BUSINESS_ID>/instrucciones.js`, which exports both plain-text strings (consumed by `agent.js:buildSystemPrompt()` for the system prompt) and bilingual ES/EN functions `getPreInstrucciones()`/`getPostInstrucciones()` (consumed by `workflows/n8n-endpoints.js` for notification messages). Both uses come from the same file — edit there only.
-
-Health check: `GET /health`
+3. Create Telegram bot + Supabase project + run `supabase/schema.sql`
+4. Set `.env` with `BUSINESS_ID=<your-id>` and all required tokens
 
 ---
 
 ## Environment variables
 
 ```env
+# Core
 ANTHROPIC_API_KEY=
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_ADMIN_CHAT_ID=     # Omit to allow any chat to use #admin
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
 BUSINESS_ID=clinica-nombre
 PORT=3000
+
+# Telegram
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ADMIN_CHAT_ID=       # Omit to allow any chat to use #admin
+
+# WhatsApp (Evolution API)
+EVOLUTION_API_URL=             # e.g. https://evolution.yourserver.com
+EVOLUTION_API_KEY=
+EVOLUTION_INSTANCE=            # WhatsApp instance name
+
+# Voice (Vapi)
+VAPI_API_KEY=
+VAPI_WEBHOOK_SECRET=           # For webhook signature validation
+
+# n8n
+N8N_API_KEY=                   # Protects POST /api/v1/broadcast
 ```
