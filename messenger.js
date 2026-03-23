@@ -1,0 +1,140 @@
+// messenger.js — Capa de mensajería con Telegram (Telegraf)
+require('dotenv').config();
+const { Telegraf } = require('telegraf');
+const cliente = require('./commands/cliente');
+const admin = require('./commands/admin');
+const memory = require('./memory');
+
+const BUSINESS_ID = process.env.BUSINESS_ID;
+const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
+
+// Sesiones admin activas: chatId → timestamp de última actividad
+const adminSessions = new Map();
+const ADMIN_SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutos
+
+function isAdminSession(chatId) {
+  const lastActivity = adminSessions.get(chatId);
+  if (!lastActivity) return false;
+  if (Date.now() - lastActivity > ADMIN_SESSION_TIMEOUT_MS) {
+    adminSessions.delete(chatId);
+    return false;
+  }
+  return true;
+}
+
+function refreshAdminSession(chatId) {
+  adminSessions.set(chatId, Date.now());
+}
+
+function createBot() {
+  const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+
+  // ── /start ────────────────────────────────────────────────────────────────
+  bot.start(async (ctx) => {
+    const chatId = String(ctx.chat.id);
+    const respuesta = await cliente.handleMessage(
+      BUSINESS_ID,
+      chatId,
+      '/start — El paciente ha iniciado la conversación por primera vez.',
+      bot
+    );
+    await ctx.reply(respuesta);
+  });
+
+  // ── Mensajes de texto ─────────────────────────────────────────────────────
+  bot.on('text', async (ctx) => {
+    const chatId = String(ctx.chat.id);
+    const texto = ctx.message.text.trim();
+
+    // Mostrar "escribiendo..."
+    try { await ctx.sendChatAction('typing'); } catch (_) {}
+
+    // ── Modo admin: activar sesión o procesar comando ──────────────────────
+    if (texto.toLowerCase().startsWith('#admin')) {
+      // Verificar que es el admin (por chat_id) o el dueño conocido
+      if (ADMIN_CHAT_ID && chatId !== ADMIN_CHAT_ID) {
+        // Si no es el admin, tratar como mensaje de paciente normal
+        return await handlePatient(ctx, bot, chatId, texto);
+      }
+
+      refreshAdminSession(chatId);
+      let respuesta;
+      try {
+        respuesta = await admin.handleMessage(BUSINESS_ID, chatId, texto, bot);
+      } catch (err) {
+        console.error('[messenger] Error en admin:', err);
+        respuesta = '⚠️ Error procesando el comando. Inténtalo de nuevo.';
+      }
+      return await ctx.reply(respuesta, { parse_mode: 'Markdown' });
+    }
+
+    // ── Si el chat_id es el del admin y tiene sesión activa ────────────────
+    if (ADMIN_CHAT_ID && chatId === ADMIN_CHAT_ID && isAdminSession(chatId)) {
+      refreshAdminSession(chatId);
+      let respuesta;
+      try {
+        respuesta = await admin.handleMessage(BUSINESS_ID, chatId, `#admin ${texto}`, bot);
+      } catch (err) {
+        console.error('[messenger] Error en admin (sesión):', err);
+        respuesta = '⚠️ Error procesando el comando.';
+      }
+      return await ctx.reply(respuesta, { parse_mode: 'Markdown' });
+    }
+
+    // ── Modo paciente ─────────────────────────────────────────────────────
+    await handlePatient(ctx, bot, chatId, texto);
+  });
+
+  // ── Mensajes de voz (no soportados todavía) ───────────────────────────────
+  bot.on('voice', async (ctx) => {
+    const idioma = await getPatientIdioma(String(ctx.chat.id));
+    const msg = idioma === 'en'
+      ? 'I\'m sorry, I\'m not able to process voice messages at the moment. Please write your query and I\'ll be happy to help you.'
+      : 'Lo siento, de momento no puedo procesar mensajes de voz. Por favor, escríbame su consulta y estaré encantada de ayudarle.';
+    await ctx.reply(msg);
+  });
+
+  // ── Fotos / documentos ────────────────────────────────────────────────────
+  bot.on(['photo', 'document'], async (ctx) => {
+    const idioma = await getPatientIdioma(String(ctx.chat.id));
+    const msg = idioma === 'en'
+      ? 'I have received your file. To manage documents or images related to your history, our team will get in touch with you. If you have any questions, please write to me.'
+      : 'He recibido su archivo. Para gestionar documentos o imágenes relacionadas con su historial, nuestro equipo se pondrá en contacto con usted. Si tiene alguna pregunta, escríbame.';
+    await ctx.reply(msg);
+  });
+
+  // ── Errores globales ──────────────────────────────────────────────────────
+  bot.catch((err, ctx) => {
+    console.error('[messenger] Error no capturado:', err);
+    try {
+      ctx.reply('Ha ocurrido un error inesperado. Nuestro equipo está siendo notificado. Por favor, inténtelo de nuevo.');
+    } catch (_) {}
+  });
+
+  return bot;
+}
+
+async function handlePatient(ctx, bot, chatId, texto) {
+  let respuesta;
+  try {
+    respuesta = await cliente.handleMessage(BUSINESS_ID, chatId, texto, bot);
+  } catch (err) {
+    console.error('[messenger] Error en cliente:', err);
+    const idioma = await getPatientIdioma(chatId);
+    respuesta = idioma === 'en'
+      ? 'I\'m sorry, I\'m experiencing technical difficulties. Please try again in a few moments or call us directly.'
+      : 'Lo siento, estoy teniendo dificultades técnicas. Por favor, inténtelo de nuevo en unos momentos o llámenos directamente.';
+  }
+  await ctx.reply(respuesta);
+}
+
+async function getPatientIdioma(chatId) {
+  try {
+    const patient = await memory.getPatient(BUSINESS_ID, chatId);
+    return patient?.idioma_preferido || 'es';
+  } catch (_) {
+    return 'es';
+  }
+}
+
+module.exports = { createBot };
