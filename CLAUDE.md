@@ -79,32 +79,34 @@ Root `config.js` is a template/readme only — it is not used at runtime.
 
 ## System prompt — dynamic assembly
 
-`agent.js:buildSystemPrompt(businessId, chatId, userQuery, is_voice)` assembles all context on every call from Supabase. There is no static system prompt.
+`agent.js:buildSystemPrompt(businessId, chatId, userQuery)` assembles all context on every call from Supabase. There is no static system prompt. The `is_voice` parameter is planned for Vapi integration — when adding it, section 4 must add a constraint: responses ≤2 sentences, spoken-word safe (no markdown, no bullet points, no emojis).
 
-Sections injected at build time:
+Sections injected at build time (numbered 1–19 in the actual prompt):
 1. Date/time and locale
 2. Language detection + formal register rule
 3. Clinic identity (from `config.js`)
-4. Tone and communication rules — **when `is_voice=true`, add a constraint: responses must be ≤2 sentences, spoken-word safe (no markdown, no bullet points, no emojis)**
-5. Clinic info (address, phone, hours)
-6. Treatment catalogue
-7. General contraindications
-8. Pre/post treatment instructions (from `instrucciones.js`)
-9. Recurrence frequencies
-10. Day context (from `agenda_dia`)
-11. Patient profile (from `pacientes`)
-12. Active appointments (from `citas`)
-13. **Support context** — top-3 KB entries most relevant to `userQuery`, selected by `contextManager.js` via keyword-overlap scoring (not the full 30-entry dump)
-14. Booking policy and availability rules
-15. Appointment flow and data collection rules
-16. Tag system documentation (all supported tags)
-17. Urgency and referral protocol
+4. Tone and communication rules
+5. Scope limits
+6. Clinic info (address, phone, hours)
+7. Treatment catalogue
+8. General contraindications
+9. Pre-treatment instructions (from `instrucciones.js`)
+10. Post-treatment instructions (from `instrucciones.js`)
+11. Recurrence frequencies
+12. Day context (from `agenda_dia`)
+13. Patient profile (from `pacientes`)
+14. Active appointments (from `citas`) — ID shown as first 8 chars
+15. **Support context** — top-3 KB entries most relevant to `userQuery`, selected by `contextManager.js` via keyword-overlap scoring (not the full dump)
+16. Booking policy and availability rules
+17. Appointment flow and data collection rules
+18. Tag system documentation (all supported tags)
+19. Urgency and referral protocol
 
 ---
 
 ## Tag pattern — key architectural decision
 
-The agent does **not** use function calling. Claude embeds special tags in its response that `core/actionHandler.js` intercepts and executes **before** the text is sent to the patient. The patient never sees the tags.
+The agent does **not** use function calling. Claude embeds special tags in its response that `actionHandler.js` intercepts and executes **before** the text is sent to the patient. The patient never sees the tags.
 
 **Format:** `[TAG_NAME: key=value, key=value]`
 
@@ -114,10 +116,10 @@ The agent does **not** use function calling. Claude embeds special tags in its r
 
 | Tag | Effect |
 |-----|--------|
-| `[CITA: nombre=X, fecha=DD/MM/YYYY, hora=HH:MM, tratamiento=X, telefono=X, idioma=es\|en, notas=X]` | Creates appointment in Supabase, notifies admin, schedules recurrence reminder |
+| `[CITA: nombre=X, fecha=DD/MM/YYYY, hora=HH:MM, tratamiento=X, profesional=X, telefono=X, idioma=es\|en, notas=X]` | Creates appointment in Supabase, notifies admin, schedules recurrence reminder |
 | `[CANCELAR_CITA: id=XXXXXXXX]` | Sets estado='cancelada', notifies admin, triggers waitlist check |
-| `[MODIFICAR_CITA: id=XXXXXXXX, campo=X, valor=X]` | Updates a single field on an existing appointment |
-| `[LISTA_ESPERA: nombre=X, tratamiento=X, franja=mañana\|tarde\|indiferente]` | Adds patient to waitlist, notifies admin |
+| `[MODIFICAR_CITA: id=XXXXXXXX, campo=hora\|fecha_cita\|tratamiento, valor=X]` | Updates a single field on an existing appointment |
+| `[LISTA_ESPERA: nombre=X, tratamiento=X, franja=mañana\|tarde\|indiferente, telefono=X]` | Adds patient to waitlist, notifies admin |
 | `[PREGUNTA_DESCONOCIDA: texto]` | Saves unknown question for admin review; admin answers with `#admin respuesta [id] [text]` |
 | `[PACIENTE_NOTA: texto]` | Appends a note to the patient profile |
 | `[DETECTAR_IDIOMA: es\|en]` | Persists the patient's preferred language (use on first message only) |
