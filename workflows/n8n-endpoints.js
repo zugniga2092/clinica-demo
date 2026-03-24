@@ -46,9 +46,15 @@ router.post('/api/v1/broadcast', async (req, res) => {
 });
 
 // ── POST /agent — Endpoint principal para n8n ─────────────────────────────────
+// Headers: x-api-key (must match N8N_API_KEY env var if set)
 // Body: { businessId, action, data }
 
 router.post('/agent', async (req, res) => {
+  const apiKey = req.headers['x-api-key'] || req.body.apiKey;
+  if (process.env.N8N_API_KEY && apiKey !== process.env.N8N_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized: invalid API key' });
+  }
+
   const { businessId, action, data } = req.body;
 
   if (!businessId || !action) {

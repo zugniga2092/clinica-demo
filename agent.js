@@ -12,7 +12,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── System prompt dinámico ────────────────────────────────────────────────────
 
-async function buildSystemPrompt(businessId, chatId, userQuery = null) {
+async function buildSystemPrompt(businessId, chatId, userQuery = null, is_voice = false) {
   const ahora = new Date();
   const fechaHoy = ahora.toISOString().split('T')[0];
   const horaActual = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
@@ -27,10 +27,14 @@ async function buildSystemPrompt(businessId, chatId, userQuery = null) {
     memory.getKnowledgeBase(businessId),
   ]);
 
-  // Catálogo de tratamientos formateado
-  const catalogoStr = config.TRATAMIENTOS.map(t =>
-    `• ${t.nombre}: ${t.descripcion} | Precio: ${t.precio} | Duración: ${t.duracion} | Sesiones: ${t.sesiones}`
-  ).join('\n');
+  // Catálogo de tratamientos formateado (campos opcionales para compatibilidad con config lean)
+  const catalogoStr = config.TRATAMIENTOS.map(t => {
+    const partes = [`• ${t.nombre}: ${t.descripcion}`];
+    if (t.precio) partes.push(`Precio: ${t.precio}`);
+    if (t.duracion) partes.push(`Duración: ${t.duracion}`);
+    if (t.sesiones) partes.push(`Sesiones: ${t.sesiones}`);
+    return partes.join(' | ');
+  }).join('\n');
 
   // Contraindicaciones generales
   const contraindicacionesStr = config.CONTRAINDICACIONES_GENERALES
@@ -90,24 +94,24 @@ Hoy es ${fechaLegible}. Son las ${horaActual}. Usa siempre esta fecha cuando el 
 Detecta el idioma del paciente en su primer mensaje y mantén ese idioma durante toda la conversación. Si escribe en inglés, responde siempre en inglés con el mismo nivel de cortesía formal.
 
 3. IDENTIDAD
-Eres ${config.NOMBRE_AGENTE}, la asistente virtual de ${config.NOMBRE_CLINICA}. ${config.DESCRIPCION}. Atiendes a los pacientes por Telegram de forma profesional y empática.
+Eres ${config.NOMBRE_AGENTE}, la asistente virtual de ${config.NOMBRE_CLINICA}. ${config.DESCRIPCION}.${config.MEDICO_PRINCIPAL ? `\nMédico responsable: ${config.MEDICO_PRINCIPAL}` : ''}
 
 4. TONO Y COMUNICACIÓN
 • Trata SIEMPRE de usted a los pacientes. Nunca tutees. Ejemplos: "¿En qué puedo ayudarle?", "¿Tiene usted alguna preferencia de horario?"
 • Si el paciente escribe en inglés: "How may I assist you?", "Dear Mr./Ms. [name]"
 • Tono cálido, empático y profesional. Habla de bienestar, confianza y cuidado personal.
-• Respuestas concisas pero completas. Máximo un emoji por mensaje si el contexto lo permite.
-• Nunca minimices una preocupación del paciente. Valida siempre antes de informar.
+• Respuestas concisas pero completas. Sin emojis en ningún caso.
+• Nunca minimices una preocupación del paciente. Valida siempre antes de informar.${is_voice ? '\n• MODO VOZ ACTIVO: Responde en máximo 2 frases cortas. Sin markdown, sin asteriscos, sin guiones, sin emojis, sin listas. Solo texto hablado natural.' : ''}
 
 5. LÍMITES
 Solo hablas de ${config.NOMBRE_CLINICA} y sus servicios. Si te preguntan sobre temas ajenos, deriva amablemente: "Estoy aquí para ayudarle con todo lo relacionado con nuestra clínica."
 
 6. INFORMACIÓN DE LA CLÍNICA
 • Dirección: ${config.DIRECCION}
-• Teléfono: ${config.TELEFONO}
+• Teléfono: ${config.TELEFONO}${config.WHATSAPP && config.WHATSAPP !== config.TELEFONO ? `\n• WhatsApp: ${config.WHATSAPP}` : ''}
+• Email: ${config.EMAIL}
 • Horario: ${config.HORARIO}
-• Cómo llegar: ${config.COMO_LLEGAR}
-• Parking: ${config.PARKING}
+• Cómo llegar: ${config.COMO_LLEGAR}${config.PARKING ? `\n• Parking: ${config.PARKING}` : ''}${config.IDIOMAS ? `\n• Idiomas de atención: ${config.IDIOMAS}` : ''}
 
 7. CATÁLOGO DE TRATAMIENTOS
 ${catalogoStr}
@@ -143,6 +147,7 @@ ${kbStr}
 
 17. FLUJO DE CITA
 Para registrar una cita necesitas: nombre completo, fecha, hora preferida, tratamiento y teléfono de contacto. Recoge los datos de forma natural, sin parecer un formulario. Si el paciente ya está en tu perfil y conoces su nombre, no vuelvas a pedírselo. Cuando tengas todos los datos, emite la etiqueta [CITA] en tu respuesta.
+Al confirmar la cita, avisa al paciente de que recibirá a continuación las indicaciones previas al tratamiento. Ejemplo: "Le envío ahora las indicaciones para preparar su tratamiento." El sistema las enviará automáticamente en el siguiente mensaje.
 
 18. ETIQUETAS DEL SISTEMA
 Cuando sea necesario, incluye UNA de estas etiquetas en tu respuesta. El sistema las procesa automáticamente — el paciente nunca las verá.
@@ -183,9 +188,9 @@ Si el paciente describe una reacción adversa grave, una urgencia médica, o nec
 
 // ── Llamada a Claude ──────────────────────────────────────────────────────────
 
-async function getResponse(businessId, chatId, userMessage) {
+async function getResponse(businessId, chatId, userMessage, is_voice = false) {
   const [systemPrompt, history] = await Promise.all([
-    buildSystemPrompt(businessId, chatId, userMessage),
+    buildSystemPrompt(businessId, chatId, userMessage, is_voice),
     memory.getHistory(businessId, chatId, 10),
   ]);
 

@@ -73,6 +73,24 @@ async function executeTag(tag, businessId, chatId, bot) {
         `Confirmar: \`#admin confirmar ${datos.nombre}\`\nID: \`${idCorto}\``
       );
       await guardarRecordatorioSiProcede(businessId, chatId, datos);
+
+      // Enviar instrucciones pre-tratamiento al paciente inmediatamente tras la reserva
+      if (bot && chatId && datos.tratamiento) {
+        try {
+          const instrucciones = require(`./clientes/${process.env.BUSINESS_ID}/instrucciones`);
+          const preInstr = instrucciones.getPreInstrucciones(datos.tratamiento);
+          if (preInstr) {
+            const idioma = datos.idioma || 'es';
+            const msg = idioma === 'en' ? preInstr.en : preInstr.es;
+            if (msg) {
+              await bot.telegram.sendMessage(String(chatId), msg, { parse_mode: 'Markdown' });
+            }
+          }
+        } catch (e) {
+          console.error('[actionHandler] Error enviando instrucciones pre-cita:', e.message);
+        }
+      }
+
       return null;
     }
 

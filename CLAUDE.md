@@ -14,11 +14,13 @@ A **Hybrid Multichannel AI Agent** for aesthetic clinics. It attends patients 24
 
 ```bash
 npm install          # Install dependencies
-npm run dev          # Start with auto-restart (node --watch, no nodemon)
+npm run dev          # Start with auto-restart (node --watch, no nodemon) — requires Node 18+
 npm start            # Production start
 ```
 
 Copy `.env.example` to `.env` before starting. The app exits immediately if any required env var is missing.
+
+There is no test suite. Validate behaviour manually via Telegram or the HTTP endpoints.
 
 ---
 
@@ -193,6 +195,8 @@ Body: { chatId, message, businessId?, context?: { expectsReply?, label? } }
 ```
 
 Sends an outbound message to a patient on any channel. Requires `N8N_API_KEY` header validation (bypassed if `N8N_API_KEY` env var is not set).
+
+**In-memory state — lost on restart:** Admin sessions (`adminSessions` Map in `messenger.js`) and outbound reply context (`outboundSessions` Map in `sessionStore.js`) are held in memory only. A process restart clears both — admins must re-activate with `#admin`, and any pending follow-up session context is lost.
 
 **Session Locking — how follow-up context works:**
 

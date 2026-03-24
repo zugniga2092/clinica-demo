@@ -90,10 +90,12 @@ create table if not exists recordatorios_tratamiento (
 create index on recordatorios_tratamiento (business_id, proxima_sesion, estado);
 
 -- ── preguntas_desconocidas ────────────────────────────────────────────────────
+-- chat_id es nullable: las entradas de KB insertadas vía saveKnowledgeDirect
+-- o kb-seed.sql no tienen chat_id (no provienen de un paciente concreto).
 create table if not exists preguntas_desconocidas (
   id          uuid primary key default gen_random_uuid(),
   business_id text not null,
-  chat_id     text not null,
+  chat_id     text,
   pregunta    text not null,
   respuesta   text,
   estado      text default 'pendiente'
