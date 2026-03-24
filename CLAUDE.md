@@ -26,21 +26,23 @@ Copy `.env.example` to `.env` before starting. The app exits immediately if any 
 
 ### Channel entry points
 
-Each channel has its own webhook/listener that normalises the incoming message into a standard internal format `{ businessId, chatId, message, channel, is_voice }` and routes it to the core agent:
+Each channel has its own webhook/listener that normalises the incoming message into a standard internal format `{ businessId, chatId, message, channel, is_voice }` and routes it to the core agent.
+
+**Currently implemented:** Telegram only. WhatsApp (Evolution API) and Voice (Vapi.ai) are planned — add `webhooks/whatsapp.js` and `webhooks/vapi.js` when implementing them.
 
 ```
-Telegram (polling)   →  messenger.js
-WhatsApp (webhook)   →  webhooks/whatsapp.js   (Evolution API)
-Voice (webhook)      →  webhooks/vapi.js        (Vapi.ai)
+Telegram (polling)   →  messenger.js           ✅ implemented
+WhatsApp (webhook)   →  webhooks/whatsapp.js   🔜 planned (Evolution API)
+Voice (webhook)      →  webhooks/vapi.js        🔜 planned (Vapi.ai)
 ```
 
-All three converge on the same core pipeline:
+All channels converge on the same core pipeline:
 
 ```
 webhooks/* + messenger.js
   → commands/cliente.js      (patient flow)
-  → core/agent.js            (LLM call + system prompt)
-  → core/actionHandler.js    (tag execution + error recovery)
+  → agent.js                 (LLM call + system prompt)
+  → actionHandler.js         (tag execution + error recovery)
   → memory.js                (Supabase persistence)
 ```
 
@@ -49,19 +51,18 @@ webhooks/* + messenger.js
 ```
 index.js
   → messenger.js
-  → webhooks/whatsapp.js
-  → webhooks/vapi.js
   → workflows/n8n-endpoints.js
+  (+ webhooks/whatsapp.js and webhooks/vapi.js when implemented)
 
 messenger.js / webhooks/*
   → commands/cliente.js
   → commands/admin.js
   → memory.js
 
-commands/cliente.js   → core/agent.js + core/actionHandler.js + memory.js
-commands/admin.js     → memory.js + core/agent.js
-core/agent.js         → memory.js + contextManager.js + clientes/<BUSINESS_ID>/config.js
-core/actionHandler.js → memory.js + clientes/<BUSINESS_ID>/config.js
+commands/cliente.js   → agent.js + actionHandler.js + memory.js
+commands/admin.js     → memory.js + agent.js
+agent.js              → memory.js + contextManager.js + clientes/<BUSINESS_ID>/config.js
+actionHandler.js      → memory.js + clientes/<BUSINESS_ID>/config.js
 workflows/n8n-endpoints.js → memory.js + sessionStore.js + commands/admin.js
 ```
 
@@ -78,7 +79,7 @@ Root `config.js` is a template/readme only — it is not used at runtime.
 
 ## System prompt — dynamic assembly
 
-`core/agent.js:buildSystemPrompt(businessId, chatId, userQuery, is_voice)` assembles all context on every call from Supabase. There is no static system prompt.
+`agent.js:buildSystemPrompt(businessId, chatId, userQuery, is_voice)` assembles all context on every call from Supabase. There is no static system prompt.
 
 Sections injected at build time:
 1. Date/time and locale
@@ -124,7 +125,7 @@ The agent does **not** use function calling. Claude embeds special tags in its r
 
 ### Error recovery — critical behaviour
 
-`processActions(rawText, businessId, chatId, bot, retryFn)` processes all tags in one global-regex pass. **If a tag's DB action fails** (e.g., `saveCita` returns null), the error is not silently swallowed:
+`actionHandler.js:processActions(rawText, businessId, chatId, bot, retryFn)` processes all tags in one global-regex pass. **If a tag's DB action fails** (e.g., `saveCita` returns null), the error is not silently swallowed:
 
 1. `actionHandler` calls `retryFn(errorMessage)` — a callback provided by `commands/cliente.js`
 2. `retryFn` injects the error as a system context message and re-calls the LLM
@@ -137,8 +138,8 @@ The agent does **not** use function calling. Claude embeds special tags in its r
 
 ## Models
 
-- **claude-sonnet-4-6** — patient conversations, full reasoning (`core/agent.js:getResponse`)
-- **claude-haiku-4-5-20251001** — admin free-text fallback, fast tasks, voice transcription summaries (`core/agent.js:getAdminResponse`)
+- **claude-sonnet-4-6** — patient conversations, full reasoning (`agent.js:getResponse`)
+- **claude-haiku-4-5-20251001** — admin free-text fallback, fast tasks, voice transcription summaries (`agent.js:getAdminResponse`)
 
 ---
 
