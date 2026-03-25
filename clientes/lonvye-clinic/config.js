@@ -30,6 +30,9 @@ module.exports = {
   // ── Idiomas de atención ───────────────────────────────────────────────────
   IDIOMAS: 'Español, inglés, árabe, chino simplificado, francés y ruso.',
 
+  // ── Reseñas ───────────────────────────────────────────────────────────────
+  GOOGLE_MAPS_URL: 'https://maps.app.goo.gl/QdGUgmLx8CLpwCsg7',
+
   // ── Catálogo de tratamientos — LEAN ───────────────────────────────────────
   // Solo nombre (para referencia de citas), descripción mínima de 1 línea
   // (para que el agente sepa de qué va si el paciente lo menciona)

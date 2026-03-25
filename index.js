@@ -3,6 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const { createBot } = require('./messenger');
 const { router } = require('./workflows/n8n-endpoints');
+const logger = require('./logger');
 
 const PORT = process.env.PORT || 3000;
 
@@ -17,8 +18,7 @@ const required = [
 
 const missing = required.filter(k => !process.env[k]);
 if (missing.length > 0) {
-  console.error(`❌ Faltan variables de entorno: ${missing.join(', ')}`);
-  console.error('Copia .env.example a .env y rellena los valores.');
+  logger.error({ msg: 'Faltan variables de entorno', missing });
   process.exit(1);
 }
 
@@ -37,28 +37,39 @@ app.use((req, _res, next) => {
 
 app.use('/', router);
 
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', business: process.env.BUSINESS_ID, ts: new Date().toISOString() });
+app.get('/health', async (_req, res) => {
+  const { createClient } = require('@supabase/supabase-js');
+  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+  let supabaseOk = false;
+  try {
+    const { error } = await supabase.from('pacientes').select('id').limit(1);
+    supabaseOk = !error;
+  } catch (_) {}
+
+  const status = supabaseOk ? 'ok' : 'degraded';
+  res.status(supabaseOk ? 200 : 503).json({
+    status,
+    business: process.env.BUSINESS_ID,
+    supabase: supabaseOk ? 'ok' : 'unreachable',
+    ts: new Date().toISOString(),
+  });
 });
 
 // ── Arrancar todo ─────────────────────────────────────────────────────────────
 async function start() {
-  // Arrancar servidor Express
   app.listen(PORT, () => {
-    console.log(`✅ Servidor HTTP escuchando en puerto ${PORT}`);
+    logger.info({ msg: 'servidor HTTP iniciado', puerto: PORT, businessId: process.env.BUSINESS_ID });
   });
 
-  // Arrancar bot en modo polling (launch() no resuelve en Telegraf v4)
   bot.launch().catch(err => {
-    console.error('❌ Error arrancando el bot de Telegram:', err.message);
+    logger.error({ msg: 'error arrancando bot Telegram', error: err.message });
     process.exit(1);
   });
-  console.log(`✅ Bot de Telegram iniciado (BUSINESS_ID: ${process.env.BUSINESS_ID})`);
-  console.log('🤖 Agente listo para atender pacientes.');
+  logger.info({ msg: 'agente listo', canal: 'telegram', businessId: process.env.BUSINESS_ID });
 }
 
 start().catch(err => {
-  console.error('❌ Error arrancando el agente:', err);
+  logger.error({ msg: 'error fatal en arranque', error: err.message });
   process.exit(1);
 });
 

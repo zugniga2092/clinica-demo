@@ -137,3 +137,12 @@ alter table citas add column if not exists valoracion integer check (valoracion 
 
 -- Añade idioma a lista_espera para notificaciones bilingües
 alter table lista_espera add column if not exists idioma text default 'es' check (idioma in ('es', 'en'));
+
+-- Añade telefono a lista_espera para contacto directo sin depender del chat_id
+alter table lista_espera add column if not exists telefono text;
+
+-- Prevención de doble reserva: índice único parcial por slot (excluye canceladas y rechazadas)
+-- profesional puede ser NULL — en ese caso el índice aplica sobre (business_id, fecha_cita, hora) sin distinción de profesional
+create unique index if not exists citas_slot_unico
+  on citas (business_id, fecha_cita, hora, coalesce(profesional, ''))
+  where estado not in ('cancelada', 'rechazada');

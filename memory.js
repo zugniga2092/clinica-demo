@@ -85,7 +85,49 @@ async function getActiveCitas(businessId, chatId) {
   return data;
 }
 
+async function checkSlotDisponible(businessId, fechaISO, hora, profesional) {
+  let query = supabase
+    .from('citas')
+    .select('id', { count: 'exact', head: true })
+    .eq('business_id', businessId)
+    .eq('fecha_cita', fechaISO)
+    .eq('hora', hora)
+    .not('estado', 'in', '("cancelada","rechazada")');
+
+  if (profesional) query = query.eq('profesional', profesional);
+
+  const { count, error } = await query;
+  if (error) { console.error('[memory] checkSlotDisponible:', error.message); return true; }
+  return count === 0;
+}
+
+// Igual que checkSlotDisponible pero excluye una cita existente (para modificaciones)
+async function checkSlotDisponibleExcluyendo(businessId, fechaISO, hora, profesional, excludeId) {
+  let query = supabase
+    .from('citas')
+    .select('id', { count: 'exact', head: true })
+    .eq('business_id', businessId)
+    .eq('fecha_cita', fechaISO)
+    .eq('hora', hora)
+    .not('estado', 'in', '("cancelada","rechazada")')
+    .neq('id', excludeId);
+
+  if (profesional) query = query.eq('profesional', profesional);
+
+  const { count, error } = await query;
+  if (error) { console.error('[memory] checkSlotDisponibleExcluyendo:', error.message); return true; }
+  return count === 0;
+}
+
 async function saveCita(businessId, chatId, datos) {
+  const fechaISO = parseFecha(datos.fecha);
+
+  const disponible = await checkSlotDisponible(businessId, fechaISO, datos.hora, datos.profesional || null);
+  if (!disponible) {
+    console.error('[memory] saveCita: slot ocupado', { fecha: fechaISO, hora: datos.hora });
+    return null;
+  }
+
   const { data, error } = await supabase
     .from('citas')
     .insert({
@@ -93,7 +135,7 @@ async function saveCita(businessId, chatId, datos) {
       chat_id: chatId,
       nombre: datos.nombre,
       telefono: datos.telefono || null,
-      fecha_cita: parseFecha(datos.fecha),
+      fecha_cita: fechaISO,
       hora: datos.hora,
       servicio: datos.servicio || 'tratamiento',
       tratamiento: datos.tratamiento || null,
@@ -208,6 +250,31 @@ async function completarCita(businessId, citaId) {
   return true;
 }
 
+async function getLastCompletedCita(businessId, chatId) {
+  const { data, error } = await supabase
+    .from('citas')
+    .select('id, tratamiento, fecha_cita')
+    .eq('business_id', businessId)
+    .eq('chat_id', chatId)
+    .eq('estado', 'completada')
+    .order('fecha_cita', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) { console.error('[memory] getLastCompletedCita:', error.message); return null; }
+  return data;
+}
+
+async function setValoracionCita(citaId, valoracion) {
+  const { error } = await supabase
+    .from('citas')
+    .update({ valoracion })
+    .eq('id', citaId);
+
+  if (error) { console.error('[memory] setValoracionCita:', error.message); return false; }
+  return true;
+}
+
 // ── Lista de espera ───────────────────────────────────────────────────────────
 
 async function saveListaEspera(businessId, chatId, datos) {
@@ -219,6 +286,8 @@ async function saveListaEspera(businessId, chatId, datos) {
       nombre: datos.nombre,
       tratamiento: datos.tratamiento,
       franja_preferida: datos.franja || 'indiferente',
+      telefono: datos.telefono || null,
+      idioma: datos.idioma || 'es',
       estado: 'activa',
     });
 
@@ -408,6 +477,22 @@ async function saveKnowledgeDirect(businessId, pregunta, respuesta) {
   return true;
 }
 
+// ── Mantenimiento ─────────────────────────────────────────────────────────────
+
+async function limpiarConversacionesAntiguas(businessId, diasMax = 90) {
+  const fechaCorte = new Date();
+  fechaCorte.setDate(fechaCorte.getDate() - diasMax);
+
+  const { error, count } = await supabase
+    .from('conversaciones')
+    .delete({ count: 'exact' })
+    .eq('business_id', businessId)
+    .lt('created_at', fechaCorte.toISOString());
+
+  if (error) { console.error('[memory] limpiarConversacionesAntiguas:', error.message); return 0; }
+  return count || 0;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function parseFecha(fechaStr) {
@@ -436,6 +521,9 @@ module.exports = {
   getCitasByFecha,
   getCitasDelDiaCompleto,
   getCitaByNombre,
+  checkSlotDisponibleExcluyendo,
+  getLastCompletedCita,
+  setValoracionCita,
   saveListaEspera,
   getListaEspera,
   updateListaEspera,
@@ -450,4 +538,5 @@ module.exports = {
   getDayContext,
   saveRecordatorioTratamiento,
   saveNotificacion,
+  limpiarConversacionesAntiguas,
 };

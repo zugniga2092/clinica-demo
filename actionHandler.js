@@ -1,5 +1,6 @@
 // actionHandler.js — Motor de procesamiento de etiquetas del LLM
 const memory = require('./memory');
+const logger = require('./logger');
 
 // Global regex — finds all [TAG_NAME: fields] in one pass
 const TAG_REGEX = /\[([A-Z_]+):\s*([^\]]+)\]/g;
@@ -33,13 +34,15 @@ async function processActions(rawText, businessId, chatId, bot, retryFn) {
 
   // Execute each action; on failure call retryFn and reprocess
   for (const tag of tags) {
+    logger.info({ canal: 'action', tag: tag.name, businessId, chatId });
     const errorMsg = await executeTag(tag, businessId, chatId, bot);
     if (errorMsg && retryFn) {
+      logger.warn({ canal: 'action', tag: tag.name, businessId, chatId, msg: 'tag falló, reintentando', error: errorMsg });
       let retryText;
       try {
         retryText = await retryFn(errorMsg);
       } catch (e) {
-        console.error('[actionHandler] retryFn failed:', e.message);
+        logger.error({ canal: 'action', businessId, chatId, msg: 'retryFn falló', error: e.message });
         break;
       }
       // Reprocess the retry response (null retryFn prevents infinite loop)
@@ -62,7 +65,7 @@ async function executeTag(tag, businessId, chatId, bot) {
     case 'CITA': {
       const citaId = await memory.saveCita(businessId, chatId, datos);
       if (!citaId) {
-        return 'No se pudo registrar la cita. Es posible que no haya disponibilidad para esa fecha y hora.';
+        return `No fue posible registrar la cita del ${datos.fecha} a las ${datos.hora} — ese horario ya está ocupado. Disculpa al paciente y ofrécele dos alternativas concretas de fecha u hora diferente.`;
       }
       const idCorto = citaId.substring(0, 8);
       await notifyAdmin(bot, businessId,
@@ -124,6 +127,15 @@ async function executeTag(tag, businessId, chatId, bot) {
         const [d, m, y] = valor.split('/');
         valor = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
       }
+      // Si se cambia fecha u hora, verificar que el nuevo slot esté libre
+      if (datos.campo === 'fecha_cita' || datos.campo === 'hora') {
+        const nuevaFecha = datos.campo === 'fecha_cita' ? valor : cita.fecha_cita;
+        const nuevaHora  = datos.campo === 'hora'       ? valor : cita.hora;
+        const disponible = await memory.checkSlotDisponibleExcluyendo(businessId, nuevaFecha, nuevaHora, cita.profesional, cita.id);
+        if (!disponible) {
+          return `El horario ${nuevaHora} del ${nuevaFecha} ya está ocupado. Por favor, ofrece al paciente una fecha u hora alternativa.`;
+        }
+      }
       await memory.updateCita(cita.id, { [datos.campo]: valor });
       await notifyAdmin(bot, businessId,
         `✏️ *Cita modificada*\nID: ${datos.id}\n${datos.campo} → ${datos.valor}`
@@ -132,10 +144,12 @@ async function executeTag(tag, businessId, chatId, bot) {
     }
 
     case 'LISTA_ESPERA': {
+      const patient = await memory.getPatient(businessId, chatId);
       await memory.saveListaEspera(businessId, chatId, {
         nombre: datos.nombre,
         tratamiento: datos.tratamiento,
         franja: datos.franja || 'indiferente',
+        idioma: patient?.idioma_preferido || 'es',
       });
       await notifyAdmin(bot, businessId,
         `📋 *Lista de espera*\n👤 ${datos.nombre}\n💆 ${datos.tratamiento}\n🕐 Franja: ${datos.franja || 'indiferente'}`
@@ -210,7 +224,7 @@ async function notifyAdmin(bot, businessId, mensaje) {
     await bot.telegram.sendMessage(adminChatId, mensaje, { parse_mode: 'Markdown' });
     await memory.saveNotificacion(businessId, 'admin_alert', mensaje, adminChatId);
   } catch (e) {
-    console.error('[actionHandler] Error notif admin:', e.message);
+    logger.error({ canal: 'action', businessId, msg: 'error notif admin', error: e.message });
   }
 }
 

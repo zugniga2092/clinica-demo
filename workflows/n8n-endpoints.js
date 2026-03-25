@@ -125,6 +125,25 @@ async function processAction(action, businessId, data, bot) {
       return { sent: true };
     }
 
+    // Seguimiento 24h post-tratamiento (conversacional, espera respuesta)
+    case 'seguimiento_24h': {
+      const { chatId, nombre, tratamiento, idioma = 'es' } = data;
+      const msg = idioma === 'en'
+        ? `Dear ${nombre}, how are you feeling 24 hours after your ${tratamiento} treatment? We hope everything is going well. Feel free to share any questions or concerns.`
+        : `Estimado/a ${nombre}, ¿cómo se encuentra 24 horas después de su tratamiento de ${tratamiento}? Esperamos que todo vaya muy bien. Si tiene cualquier duda o molestia, estamos a su disposición.`;
+
+      await sendToPatient(bot, chatId, msg);
+      await memory.saveNotificacion(businessId, 'seguimiento_24h', msg, chatId);
+
+      // Abre sesión de seguimiento: si el paciente responde, el agente recibe el contexto
+      sessionStore.setOutboundContext(String(chatId), {
+        originalMessage: msg,
+        label: 'seguimiento_24h',
+      });
+
+      return { sent: true };
+    }
+
     // Encuesta de satisfacción (48h después)
     case 'encuesta_satisfaccion': {
       const { chatId, nombre, tratamiento, idioma = 'es' } = data;
@@ -134,6 +153,16 @@ async function processAction(action, businessId, data, bot) {
 
       await sendToPatient(bot, chatId, msg);
       await memory.saveNotificacion(businessId, 'encuesta_satisfaccion', msg, chatId);
+
+      // Buscar la cita reciente para enlazar la valoración cuando el paciente responda
+      const ultimaCita = await memory.getLastCompletedCita(businessId, chatId);
+      sessionStore.setOutboundContext(String(chatId), {
+        originalMessage: msg,
+        label: 'encuesta_satisfaccion',
+        citaId: ultimaCita?.id || null,
+        idioma,
+      });
+
       return { sent: true };
     }
 
@@ -192,6 +221,7 @@ async function processAction(action, businessId, data, bot) {
 
       await sendToPatient(bot, enEspera.chat_id, msg);
       await memory.saveNotificacion(businessId, 'notificar_lista_espera', msg, enEspera.chat_id);
+      await memory.updateListaEspera(enEspera.id, { estado: 'asignada' });
       return { found: true, notificado: enEspera.nombre };
     }
 
@@ -218,6 +248,13 @@ async function processAction(action, businessId, data, bot) {
       );
       await sendToAdmin(bot, adminChatId, reporte);
       return { sent: true };
+    }
+
+    // Limpieza de conversaciones antiguas (>90 días) — disparar desde n8n mensualmente
+    case 'limpiar_conversaciones': {
+      const diasMax = data?.diasMax || 90;
+      const eliminadas = await memory.limpiarConversacionesAntiguas(businessId, diasMax);
+      return { eliminadas, diasMax };
     }
 
     default:

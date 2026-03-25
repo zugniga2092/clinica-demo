@@ -169,6 +169,23 @@ async function cmdCancelar(businessId, nombre, bot) {
     }
   }
 
+  // Notificar al primero en lista de espera si hay alguien esperando ese tratamiento
+  if (bot && cita.tratamiento) {
+    const enEspera = await memory.getPrimerEnEspera(businessId, cita.tratamiento, null);
+    if (enEspera) {
+      const idioma = enEspera.idioma || 'es';
+      const msgEspera = idioma === 'en'
+        ? `Dear ${enEspera.nombre}, good news! A slot has opened up for ${enEspera.tratamiento}. Would you like to book an appointment?`
+        : `Estimado/a ${enEspera.nombre}, ¡buenas noticias! Se ha liberado un hueco para ${enEspera.tratamiento}. ¿Le gustaría concertar una cita?`;
+      try {
+        await bot.telegram.sendMessage(enEspera.chat_id, msgEspera);
+        await memory.updateListaEspera(enEspera.id, { estado: 'asignada' });
+      } catch (e) {
+        console.error('[admin] Error notificando lista espera:', e.message);
+      }
+    }
+  }
+
   return `🗑️ Cita de *${nombre}* cancelada y paciente notificado.`;
 }
 

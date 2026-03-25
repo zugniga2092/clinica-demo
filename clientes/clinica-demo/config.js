@@ -19,6 +19,9 @@ module.exports = {
   TIEMPO_MIN_ENTRE_CITAS: 30,
   ANTELACION_MIN_RESERVA: 2,
 
+  // ── Reseñas ───────────────────────────────────────────────────────────────
+  GOOGLE_MAPS_URL: '',  // URL de reseña Google Maps de la clínica
+
   // ── Catálogo de tratamientos ───────────────────────────────────────────────
   TRATAMIENTOS: [
     {

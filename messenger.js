@@ -5,6 +5,7 @@ const cliente = require('./commands/cliente');
 const admin = require('./commands/admin');
 const memory = require('./memory');
 const sessionStore = require('./sessionStore');
+const logger = require('./logger');
 
 const BUSINESS_ID = process.env.BUSINESS_ID;
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
@@ -106,7 +107,7 @@ function createBot() {
 
   // ── Errores globales ──────────────────────────────────────────────────────
   bot.catch(async (err, ctx) => {
-    console.error('[messenger] Error no capturado:', err);
+    logger.error({ canal: 'telegram', msg: 'error no capturado', error: err.message });
     try {
       const idioma = await getPatientIdioma(String(ctx.chat?.id));
       const msg = idioma === 'en'
@@ -120,6 +121,7 @@ function createBot() {
 }
 
 async function handlePatient(ctx, bot, chatId, texto) {
+  const done = logger.timer({ canal: 'telegram', businessId: BUSINESS_ID, chatId });
   let respuesta;
   try {
     let mensajeFinal = texto;
@@ -128,20 +130,63 @@ async function handlePatient(ctx, bot, chatId, texto) {
     const outboundCtx = sessionStore.getOutboundContext(chatId);
     if (outboundCtx) {
       sessionStore.clearOutboundContext(chatId);
+
+      // Respuesta a encuesta: manejar directamente sin pasar por el LLM
+      if (outboundCtx.label === 'encuesta_satisfaccion') {
+        const handled = await handleEncuestaRespuesta(ctx, chatId, texto, outboundCtx);
+        if (handled) return;
+        // Si no es un número válido, el paciente escribió algo libre → cae al agente con contexto
+      }
+
       mensajeFinal =
         `[CONTEXTO: El paciente responde a este mensaje previo del sistema: "${outboundCtx.originalMessage}"]` +
         `\n\n${texto}`;
     }
 
     respuesta = await cliente.handleMessage(BUSINESS_ID, chatId, mensajeFinal, bot);
+    done({ msg: 'respuesta enviada' });
   } catch (err) {
-    console.error('[messenger] Error en cliente:', err);
+    logger.error({ canal: 'telegram', businessId: BUSINESS_ID, chatId, msg: 'error en handlePatient', error: err.message });
     const idioma = await getPatientIdioma(chatId);
     respuesta = idioma === 'en'
       ? 'I\'m sorry, I\'m experiencing technical difficulties. Please try again in a few moments or call us directly.'
       : 'Lo siento, estoy teniendo dificultades técnicas. Por favor, inténtelo de nuevo en unos momentos o llámenos directamente.';
   }
   await ctx.reply(respuesta);
+}
+
+async function handleEncuestaRespuesta(ctx, chatId, texto, outboundCtx) {
+  const puntuacion = parseInt(texto.trim(), 10);
+  if (isNaN(puntuacion) || puntuacion < 1 || puntuacion > 5) return false;
+
+  const idioma = outboundCtx.idioma || 'es';
+
+  // Guardar valoración en la cita
+  if (outboundCtx.citaId) {
+    await memory.setValoracionCita(outboundCtx.citaId, puntuacion);
+  }
+
+  if (puntuacion >= 4) {
+    let googleUrl = '';
+    try {
+      const config = require(`./clientes/${BUSINESS_ID}/config`);
+      googleUrl = config.GOOGLE_MAPS_URL || '';
+    } catch (_) {}
+
+    const msg = idioma === 'en'
+      ? `Thank you so much for your ${puntuacion}/5 rating! We're delighted you had a great experience.\n\nWould you mind sharing it on Google? It really helps us reach more patients.\n\n${googleUrl}`.trim()
+      : `¡Muchas gracias por su valoración de ${puntuacion}/5! Nos alegra mucho que su experiencia haya sido tan positiva.\n\n¿Le importaría compartirla en Google? Nos ayuda mucho a llegar a más pacientes.\n\n${googleUrl}`.trim();
+
+    await ctx.reply(msg);
+    await memory.saveNotificacion(BUSINESS_ID, 'solicitar_resena', msg, chatId);
+  } else {
+    const msg = idioma === 'en'
+      ? `Thank you for your honest feedback. We're sorry the experience wasn't as expected. We'd genuinely like to know how we can improve — feel free to share anything that didn't meet your expectations.`
+      : `Gracias por su valoración sincera. Lamentamos que la experiencia no haya sido la esperada. Nos gustaría saber cómo podemos mejorar. Si desea contarnos algo más, estamos a su disposición.`;
+    await ctx.reply(msg);
+  }
+
+  return true;
 }
 
 async function getPatientIdioma(chatId) {

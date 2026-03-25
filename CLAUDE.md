@@ -106,6 +106,18 @@ Sections injected at build time (numbered 1–19 in the actual prompt):
 
 ---
 
+## Sales & conversion layer — system prompt sections 17–18
+
+The agent is designed as a consultative closer, not an information bot. Two prompt sections govern this:
+
+**Section 17 — Conversation flow (6 phases):** Apertura → Detección → Calificación suave → Generación de confianza → Gestión del precio → Cierre. The closing technique is always a binary date choice ("¿Le vendría mejor mañana o pasado?") — never an open "¿Le gustaría reservar?".
+
+**Section 18 — Objection handling (7 mapped objections + universal pattern):** Each objection maps to a fixed Validar → Reencuadrar → Redirigir pattern. The 7 covered: price/exact cost, "need to think about it", fear/uncertainty, comparing with other clinics, no time, just wanted info, not sure if needed. Universal fallback: "Entiendo perfectamente, es algo muy habitual. Por eso recomendamos valorarlo en consulta. ¿Le vendría mejor mañana o pasado?"
+
+Price is never given as an exact figure without clinical context — always framed as a range from the catalogue with a redirect to a free in-person consultation.
+
+---
+
 ## Tag pattern — key architectural decision
 
 The agent does **not** use function calling. Claude embeds special tags in its response that `actionHandler.js` intercepts and executes **before** the text is sent to the patient. The patient never sees the tags.
@@ -182,9 +194,9 @@ POST /agent
 Body: { businessId, action, data }
 ```
 
-Handled in `workflows/n8n-endpoints.js`. The bot instance is injected into Express requests via middleware in `index.js`.
+Handled in `workflows/n8n-endpoints.js`. The bot instance is injected into Express requests via middleware in `index.js`. The importable n8n workflow definition for pre-appointment reminders is at `supabase/n8n-recordatorios-pre-cita.json`.
 
-Supported actions: `recordatorio_48h` · `recordatorio_24h` · `recordatorio_2h` · `post_tratamiento` · `encuesta_satisfaccion` · `solicitar_resena` · `recordatorio_recurrencia` · `reactivar_pacientes` · `notificar_lista_espera` · `aviso_agenda` · `reporte_semanal`
+Supported actions: `recordatorio_48h` · `recordatorio_24h` · `recordatorio_2h` · `post_tratamiento` · `seguimiento_24h` · `encuesta_satisfaccion` · `solicitar_resena` · `recordatorio_recurrencia` · `reactivar_pacientes` · `notificar_lista_espera` · `aviso_agenda` · `reporte_semanal` · `limpiar_conversaciones`
 
 ### Proactive broadcast endpoint
 
@@ -244,10 +256,28 @@ All tables include `business_id` for multi-tenant isolation. Run `supabase/schem
 
 ## Adding a new client
 
-1. Create `clientes/<BUSINESS_ID>/config.js` (copy from `clientes/clinica-demo/config.js`)
-2. Create `clientes/<BUSINESS_ID>/instrucciones.js` (copy from `clientes/clinica-demo/instrucciones.js`)
-3. Create Telegram bot + Supabase project + run `supabase/schema.sql`
-4. Set `.env` with `BUSINESS_ID=<your-id>` and all required tokens
+Existing clients: `clientes/clinica-demo/` (demo template) and `clientes/lonvye-clinic/` (production client).
+
+**The entire core is generic — never modify these files per client:**
+`index.js`, `messenger.js`, `agent.js`, `actionHandler.js`, `memory.js`, `contextManager.js`, `sessionStore.js`, `commands/*`, `workflows/*`, `supabase/schema.sql`
+
+**Per-client files to create (copy from `clinica-demo`):**
+
+| File | What goes in it |
+|------|----------------|
+| `clientes/<ID>/config.js` | Clinic identity, contact, hours, treatment catalog (`id`, `nombre`, `descripcion`, `frecuencia_dias` required per treatment), `GOOGLE_MAPS_URL`, cancellation policy |
+| `clientes/<ID>/instrucciones.js` | Pre/post treatment instructions as plain strings (for system prompt) + bilingual `{es, en}` objects (for patient notifications) |
+| `clientes/<ID>/kb-seed.sql` | 30-50 Q&A pairs in patient language — optional but strongly recommended |
+
+**Required `.env` fields per client:** `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `BUSINESS_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID`
+
+**Steps:**
+1. Create Supabase project → run `supabase/schema.sql`
+2. Create Telegram bot (@BotFather) → get token + admin chat ID
+3. Create the two client files + `.env`
+4. `npm run dev` → test on Telegram
+5. (Optional) Run `kb-seed.sql` for the knowledge base
+6. Configure n8n workflows with server URL + `BUSINESS_ID`
 
 ---
 
